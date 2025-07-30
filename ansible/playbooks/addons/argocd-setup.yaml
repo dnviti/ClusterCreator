@@ -34,7 +34,7 @@
           helm upgrade --install argocd argo/argo-cd
           --namespace argocd
           --set server.service.type=ClusterIP
-          --set server.insecure=true
+          --set "configs.params.server\.insecure=true"
 
     - name: Wait for Argo CD deployments to be ready
       ansible.builtin.command:

@@ -54,7 +54,7 @@
           --set gitea.admin.password={{ gitea_admin_password }}
           --set service.http.port=3000
           --set ingress.enabled=false
-          --set gitea.config.server.ROOT_URL=https://{{ gitea_hostname }}
+          --set gitea.config.server.ROOT_URL=https://gitea.{{ cluster_config.apps_domain }}
           --set persistence.storageClass=longhorn
 
     - name: Wait for Gitea PVC to be bound
@@ -103,7 +103,7 @@
         src: ../../helpers/gitea-ingress.yaml.j2
         dest: "/tmp/gitea-ingress.yaml"
       vars:
-        gitea_hostname: "{{ gitea_hostname }}"
+        gitea_hostname: "gitea.{{ cluster_config.apps_domain }}"
       when:
         - cluster_config.ingress_controller in ['nginx', 'traefik']
         - cluster_config.git_platform is defined

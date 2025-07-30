@@ -51,7 +51,7 @@ resource "proxmox_virtual_environment_vm" "node" {
   dynamic "hostpci" {
     for_each = { for device in each.value.devices : device.mapping => device if device.type == "pci" }
     content {
-      device  = "hostpci${hostpci.key}"  # `key` from for_each is used for the index
+      device  = "hostpci${for_each.key}"  # `key` from for_each is used for the index
       mapping = hostpci.value.mapping
       pcie    = true
       mdev    = try(hostpci.value.mdev, null) != "" ? hostpci.value.mdev : null
@@ -89,7 +89,7 @@ resource "proxmox_virtual_environment_vm" "node" {
         dynamic "ipv4" {
           for_each = [1]  # This ensures the block is always created
           content {
-            address = "${each.value.ipv4.vm_ip}/24"
+            address = "${each.value.ipv4.vm_ip}/${each.value.ipv4.subnet_mask}"
             gateway = each.value.ipv4.gateway
           }
         }

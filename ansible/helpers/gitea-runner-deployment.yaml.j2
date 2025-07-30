@@ -41,7 +41,7 @@ spec:
             - name: DOCKER_CERT_PATH
               value: /certs/client
             - name: GITEA_INSTANCE_URL
-              value: "https://{{ gitea_hostname }}"
+              value: "https://gitea.{{ cluster_config.apps_domain }}"
             - name: GITEA_RUNNER_REGISTRATION_TOKEN
               valueFrom:
                 secretKeyRef:

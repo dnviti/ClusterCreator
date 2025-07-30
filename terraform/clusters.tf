@@ -46,6 +46,7 @@ variable "clusters" {
       vlan_name              : optional(string, null)                                     # Optional. The name of the VLAN in Unifi. Defaults to the cluster name in all caps.
       ipv4                   : object({
         subnet_prefix        : optional(string, "10.0.0")                                 # Optional. First three octets of the host IPv4 network's subnet (assuming its a /24)
+        subnet_mask          : optional(number, 24)                                       # Optional. Subnet mask for the IPv4 network. Defaults to /24.
         gateway              : optional(string, "10.0.0.1")                               # Optional. Gateway for vm hosts
         pod_cidr             : optional(string, "10.42.0.0/16")                           # Optional. Cidr range for pod networking internal to cluster. Shouldn't overlap with ipv4 lan network. These must differ cluster to cluster if using clustermesh.
         svc_cidr             : optional(string, "10.43.0.0/16")                           # Optional. Cidr range for service networking internal to cluster. Shouldn't overlap with ipv4 lan network.
@@ -132,6 +133,7 @@ variable "clusters" {
       networking = {
         ipv4 = {
           subnet_prefix        = "10.0.1"
+          subnet_mask          = 24
           gateway              = "10.0.1.1"
           dns1                 = "10.0.1.1"
           dns2                 = "10.0.1.2"
@@ -193,6 +195,7 @@ variable "clusters" {
       networking = {
         ipv4 = {
           subnet_prefix        = "10.0.2"
+          subnet_mask          = 24
           gateway              = "10.0.2.1"
           dns1                 = "10.0.2.1"
           dns2                 = "10.0.2.2"
@@ -262,6 +265,7 @@ variable "clusters" {
       networking = {
         ipv4 = {
           subnet_prefix        = "10.0.3"
+          subnet_mask          = 24
           gateway              = "10.0.3.1"
           dns1                 = "10.0.3.1"
           dns2                 = "10.0.3.2"

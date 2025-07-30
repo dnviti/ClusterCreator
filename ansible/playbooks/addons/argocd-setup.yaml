@@ -34,6 +34,7 @@
           helm upgrade --install argocd argo/argo-cd
           --namespace argocd
           --set server.service.type=ClusterIP
+          --set server.insecure=true
 
     - name: Wait for Argo CD deployments to be ready
       ansible.builtin.command:
@@ -50,7 +51,7 @@
         src: ../../helpers/argocd-ingress.yaml.j2
         dest: "/tmp/argocd-ingress.yaml"
       vars:
-        argocd_hostname: "{{ argocd_hostname }}"
+        argocd_hostname: "argocd.{{ cluster_config.apps_domain }}"
       when:
         - cluster_config.ingress_controller in ['nginx', 'traefik']
         - cluster_config.gitops is defined
@@ -76,7 +77,7 @@
             namespace: argocd
             secret_name: argocd-server-tls
             issuer_name: custom-ca-issuer
-            common_name: "{{ argocd_hostname }}"
+            common_name: "argocd.{{ cluster_config.apps_domain }}"
 
         - name: Create ArgoCD Certificate
           ansible.builtin.command:

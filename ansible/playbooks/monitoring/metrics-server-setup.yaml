@@ -1,0 +1,37 @@
+---
+- name: Apply metrics-server manifest
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+
+    - name: Calculate the count of non-API/ETCD servers
+      set_fact:
+        non_api_etcd_server_count: "{{ groups['all'] | length - (groups['controlplane'] | default([]) | length + groups['etcd'] | default([]) | length) }}"
+
+    - name: Determine if needing HA based on non-API/ETCD server count
+      set_fact:
+        metrics_server_replica_count: "{{ 1 if non_api_etcd_server_count <= \"1\" else 2 }}"
+
+    - name: Add Metrics-Server Helm repository
+      ansible.builtin.shell:
+        cmd: helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+      args:
+        executable: /bin/bash
+
+    - name: Update Helm repositories
+      ansible.builtin.shell:
+        cmd: helm repo update
+      args:
+        executable: /bin/bash
+
+    - name: Install Metrics-Server
+      ansible.builtin.shell:
+        cmd: >
+          helm upgrade --install metrics-server metrics-server/metrics-server
+          --namespace kube-system
+          --set replicas={{ metrics_server_replica_count }}
+          --version {{ metrics_server_version }}
+      args:
+        executable: /bin/bash

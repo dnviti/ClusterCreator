@@ -1,0 +1,27 @@
+- name: Deploy kube-prometheus-stack
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Add Prometheus Community Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Install kube-prometheus-stack
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install prometheus prometheus-community/kube-prometheus-stack
+          --namespace monitoring
+          --create-namespace
+          --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false
+          --set grafana.service.type=ClusterIP
+
+    - name: Wait for Prometheus deployments to be ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Available deployment --all -n monitoring --timeout=10m
+      changed_when: false

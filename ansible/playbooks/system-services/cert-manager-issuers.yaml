@@ -1,0 +1,41 @@
+- name: Create ClusterIssuer for Custom CA
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Check if custom CA cert exists
+      delegate_to: localhost
+      become: no
+      stat:
+        path: ../../../ssl/authorities/ca.crt
+      register: custom_ca_cert
+      ignore_errors: true
+
+    - name: Create secret with custom CA
+      when: custom_ca_cert.stat.exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: custom-ca-secret
+            namespace: cert-manager
+          type: kubernetes.io/tls
+          data:
+            tls.crt: "{{ lookup('file', '../../../ssl/authorities/ca.crt') | b64encode }}"
+            tls.key: "{{ lookup('file', '../../../ssl/authorities/ca.key') | b64encode }}"
+
+    - name: Create ClusterIssuer
+      when: custom_ca_cert.stat.exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: custom-ca-issuer
+          spec:
+            ca:
+              secretName: custom-ca-secret

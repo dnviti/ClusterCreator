@@ -1,0 +1,20 @@
+- name: Deploy Sysdig Agent
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Add Sysdig Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add sysdig https://charts.sysdig.com
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Install Sysdig Agent
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install sysdig-agent sysdig/sysdig-deploy
+          --namespace sysdig-agent --create-namespace
+          --set global.sysdig.accessKey={{ cluster_config.security.sysdig_access_key }}

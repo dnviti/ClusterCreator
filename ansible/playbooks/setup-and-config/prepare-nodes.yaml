@@ -1,0 +1,269 @@
+---
+- name: Distribute custom CA certificates
+  hosts: all
+  become: true
+  gather_facts: true # Gathers ansible_os_family
+  tasks:
+    - name: Ensure ca-certificates package is installed
+      ansible.builtin.package:
+        name: ca-certificates
+        state: present
+
+    - name: Find certificate files in the local ssl/certificates directory
+      ansible.builtin.find:
+        paths: ../../../ssl/certificates
+        patterns: "*.crt"
+        file_type: file
+      register: local_certs
+      delegate_to: localhost
+
+    - name: Find certificate files in the local ssl/authorities directory
+      ansible.builtin.find:
+        paths: ../../../ssl/authorities
+        patterns: "*.crt"
+        file_type: file
+      register: local_authority_certs
+      delegate_to: localhost
+      ignore_errors: true
+
+    - name: Combine certificate lists
+      set_fact:
+        all_local_certs: "{{ local_certs.files + (local_authority_certs.files | default([])) }}"
+
+    - name: Set OS-specific certificate paths and commands
+      ansible.builtin.set_fact:
+        ca_path: >-
+          {% if ansible_os_family in ["Debian", "Ubuntu", "Mint"] %}/usr/local/share/ca-certificates
+          {% elif ansible_os_family in ["RedHat", "Rocky", "CentOS", "Fedora", "AlmaLinux", "OracleLinux", "Amazon"] %}/etc/pki/ca-trust/source/anchors
+          {% elif ansible_os_family in ["Suse", "openSUSE"] %}/etc/pki/trust/anchors
+          {% elif ansible_os_family == "Archlinux" %}/etc/ca-certificates/trust-source/anchors
+          {% elif ansible_os_family == "Alpine" %}/usr/local/share/ca-certificates
+          {% else %}/usr/local/share/ca-certificates
+          {% endif %}
+        ca_update_command: >-
+          {% if ansible_os_family in ["Debian", "Ubuntu", "Mint", "Alpine"] %}update-ca-certificates
+          {% elif ansible_os_family in ["RedHat", "Rocky", "CentOS", "Fedora", "AlmaLinux", "OracleLinux", "Amazon"] %}update-ca-trust
+          {% elif ansible_os_family in ["Suse", "openSUSE"] %}update-ca-certificates
+          {% elif ansible_os_family == "Archlinux" %}trust extract-compat
+          {% else %}update-ca-certificates
+          {% endif %}
+
+    - name: Ensure the destination directory for CA certificates exists
+      ansible.builtin.file:
+        path: "{{ ca_path | trim }}"
+        state: directory
+        mode: '0755'
+      when: all_local_certs | length > 0
+
+    - name: Copy CA certificates to nodes
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ ca_path | trim }}/{{ item.path | basename | trim }}"
+        mode: '0644'
+      loop: "{{ all_local_certs }}"
+      when: all_local_certs | length > 0
+      register: copy_ca_result
+
+    - name: Update CA certificate store on nodes
+      ansible.builtin.command:
+        cmd: "{{ ca_update_command }}"
+      when: copy_ca_result.changed
+
+- name: Ensure template was created correctly
+  hosts: all
+  gather_facts: false
+  tags:
+    - ensure_space
+  tasks:
+    - name: Find all matching firstboot log files
+      find:
+        paths: "/var/log"
+        patterns: "template-firstboot-*.log"
+      register: log_files
+    - name: Check firstboot log files for failures to ensure all packages were installed correctly (excluding specific patterns)
+      shell: |
+        grep -iE 'Error|Fatal' {{ item.path }} | grep -vE 'mysql/error.log|errors = false|liberror|No error reported|Failed to open terminal.debconf|errorcode.md|libgpg-error'
+      # ADD EXCLUSIONS HERE^
+      register: grep_output
+      failed_when: grep_output.rc == 0
+      with_items: "{{ log_files.files }}"
+      ignore_errors: true
+      no_log: true
+    - name: Warn and pause if 'Error' or 'Fatal' is found in any firstboot log files, excluding specific instances
+      pause:
+        prompt: "Warning: 'Error' or 'Fatal' strings found in firstboot log files. Template VM may have an issue with its firstboot scripts. Investigate /var/log/template-firstboot-*.log files and, if needed, recreate the template and the VM(s). You can add exclusions in the prepare-nodes playbook (~ line 26) to filter out false-positives. Press enter to ignore this warning or Ctrl+C to abort."
+      when: grep_output.results | selectattr('rc', 'equalto', 0) | list | count > 0
+
+- name: Prepare nodes
+  hosts: all
+  gather_facts: true # needs to know OS type
+  become: true  # This ensures all tasks are run with elevated privileges
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+
+    - name: Add IPv6 forwarding line to sysctl.d file (if IPv6 is enabled)
+      ansible.builtin.lineinfile:
+        path: /etc/sysctl.d/k8s_sysctl.conf
+        line: 'net.ipv6.conf.all.forwarding        = 1'
+        state: present
+      when: cluster_config.networking.ipv6.enabled and cluster_config.networking.ipv6.dual_stack
+    - name: Reload sysctl to apply changes (if IPv6 is enabled)
+      ansible.builtin.command: sysctl --system
+      when: cluster_config.networking.ipv6.enabled and cluster_config.networking.ipv6.dual_stack
+
+    - name: Configure kubelet with the correct interface IP
+      shell: |
+        {% if cluster_config.networking.ipv6.enabled and cluster_config.networking.ipv6.dual_stack %}
+        node_ip="{{ ipv4 }},{{ ipv6 }}"
+        {% else %}
+        node_ip="{{ ipv4 }}"
+        {% endif %}
+
+        kubelet_extra_args="--node-ip=${node_ip} --max-pods={{ cluster_config.max_pods_per_node }} --rotate-server-certificates=true --rotate-certificates=true --housekeeping-interval=5s"
+        # the housekeeping-interval was a fix I needed to fix cadvisor metrics not being deduplicated correctly when sent to Mimir.
+
+        echo "KUBELET_EXTRA_ARGS=\"$kubelet_extra_args\"" | tee /etc/default/kubelet
+      args:
+        executable: /bin/bash
+      tags:
+        - kubelet_node_ip
+
+    - name: Set helpful aliases
+      shell: |
+        echo "alias k='kubectl'" | tee -a /home/{{ cluster_config.ssh.ssh_user }}/.bashrc
+        echo "alias c='clear'" | tee -a /home/{{ cluster_config.ssh.ssh_user }}/.bashrc
+        echo "alias h='history'" | tee -a /home/{{ cluster_config.ssh.ssh_user }}/.bashrc
+      args:
+        executable: /bin/bash
+      tags:
+        - set_aliases
+
+    - name: Add VIP and hostname to /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ cluster_config.networking.kube_vip.vip }} {{ cluster_config.networking.kube_vip.vip_hostname }}"
+        create: yes
+      tags: etc_hosts
+    - name: Add VIP and hostname to cloud templates (if exists)
+      ansible.builtin.lineinfile:
+        path: /etc/cloud/templates/hosts.debian.tmpl
+        line: "{{ cluster_config.networking.kube_vip.vip }} {{ cluster_config.networking.kube_vip.vip_hostname }}"
+        create: yes
+      when: ansible_facts['os_family'] == "Debian"
+      tags: etc_hosts
+    - name: Update /etc/hosts with node entries
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ hostvars[item].ansible_host }} {{ item }}"
+        state: present
+      loop: "{{ groups['all'] }}"
+      tags:
+        - etc_hosts
+    - name: Update /etc/hosts with node entries to cloud templates (if exists)
+      ansible.builtin.lineinfile:
+        path: /etc/cloud/templates/hosts.debian.tmpl
+        line: "{{ hostvars[item].ansible_host }} {{ item }}"
+        state: present
+      loop: "{{ groups['all'] }}"
+      when: ansible_facts['os_family'] == "Debian"
+      tags:
+        - etc_hosts
+
+- name: Configure settings for nodes with NVIDIA GPUs attached
+  hosts: all
+  become: true
+  gather_facts: false
+  tags: nvidia
+  tasks:
+    - name: Check for NVIDIA GPU presence
+      ansible.builtin.shell: lspci | grep -i nvidia
+      register: nvidia_check
+      failed_when: false
+
+    - name: Set fact if NVIDIA GPU is present
+      ansible.builtin.set_fact:
+        has_nvidia_gpu: "{{ nvidia_check.rc == 0 }}"
+
+    - name: End play on nodes without NVIDIA GPU
+      ansible.builtin.meta: end_host
+      when: not has_nvidia_gpu
+
+    - name: Ensure Nvidia GPU Drivers are present
+      ansible.builtin.command: nvidia-smi
+      register: nvidia_output
+
+    - name: Display Nvidia GPU info
+      ansible.builtin.debug:
+        msg: "{{ nvidia_output.stdout }}"
+
+    - name: Enable persistence mode for NVIDIA GPU
+      ansible.builtin.command: nvidia-smi -pm 1
+
+    - name: Reset application clocks to default
+      ansible.builtin.command: nvidia-smi -rac
+
+    - name: Check if NVIDIA power management service file exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/nvidia-power-management.service
+      register: nvidia_service_file
+
+    - name: Create systemd service for NVIDIA GPU power management
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/nvidia-power-management.service
+        content: |
+          [Unit]
+          Description=NVIDIA GPU Power Management
+          After=network.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/nvidia-smi -pm 1
+          ExecStart=/usr/bin/nvidia-smi -rac
+          RemainAfterExit=true
+
+          [Install]
+          WantedBy=multi-user.target
+      when: not nvidia_service_file.stat.exists
+      notify:
+        - Reload systemd daemon
+
+    - name: Enable and start NVIDIA GPU power management service
+      ansible.builtin.systemd:
+        name: nvidia-power-management
+        enabled: true
+        state: started
+
+    - name: Check if containerd is configured with NVIDIA runtime
+      ansible.builtin.command: "grep -q 'nvidia' /etc/containerd/config.toml"
+      register: containerd_config
+      failed_when: false
+      changed_when: false
+
+    - name: Configure containerd with NVIDIA runtime
+      ansible.builtin.shell: |
+        # Backup the original config.toml
+        cp /etc/containerd/config.toml /etc/containerd/config.toml-original
+
+        # Run NVIDIA CTK to configure containerd with NVIDIA runtime
+        nvidia-ctk runtime configure --runtime=containerd
+
+        # Convert modified and original config.toml files to YAML
+        yj -ty < /etc/containerd/config.toml > /tmp/nvidia-containerd-config.yaml
+        yj -ty < /etc/containerd/config.toml-original > /tmp/original-containerd-config.yaml
+
+        # Merge YAML files and convert back to TOML
+        yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' /tmp/original-containerd-config.yaml /tmp/nvidia-containerd-config.yaml | yj -yt > /etc/containerd/config.toml
+      when: containerd_config.rc != 0
+      notify:
+        - Restart containerd
+
+  handlers:
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted

@@ -1,0 +1,48 @@
+- name: Setup gVisor-Falco integration service on all nodes
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    falco_gvisor_socket: "/run/falco/falco.sock"
+  tasks:
+    - name: Create gvisor-falco systemd service file
+      ansible.builtin.template:
+        src: ../../helpers/gvisor-falco.service.j2
+        dest: /etc/systemd/system/gvisor-falco.service
+        mode: '0644'
+
+    - name: Enable and start gvisor-falco service
+      ansible.builtin.systemd:
+        name: gvisor-falco
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+- name: Deploy Falco with gVisor engine enabled
+  hosts: "{{ groups['controlplane'][0] }}"
+  become: true
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+    falco_gvisor_socket: "/run/falco/falco.sock"
+  tasks:
+    - name: Add Falco Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add falcosecurity https://falcosecurity.github.io/charts
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Install Falco with gVisor configuration
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install falco falcosecurity/falco
+          --namespace falco --create-namespace
+          --set driver.enabled=false
+          --set ebpf.enabled=false
+          --set gvisor.enabled=true
+          --set gvisor.config.socket={{ falco_gvisor_socket }}
+          --set tty=true
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf

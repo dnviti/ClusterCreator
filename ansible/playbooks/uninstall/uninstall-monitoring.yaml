@@ -1,0 +1,18 @@
+- name: Uninstall All Monitoring
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Uninstall Prometheus Stack
+      when: cluster_config.monitoring is defined and cluster_config.monitoring.prometheus_enabled | default(false)
+      block:
+      - name: Uninstall Prometheus helm chart
+        ansible.builtin.command:
+          cmd: helm uninstall kube-prometheus-stack -n monitoring
+        ignore_errors: yes
+
+      - name: Delete Monitoring Namespace
+        ansible.builtin.command:
+          cmd: kubectl delete namespace monitoring --ignore-not-found=true
+        ignore_errors: yes

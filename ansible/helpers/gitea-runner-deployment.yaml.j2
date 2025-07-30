@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea-runner-dind
+  namespace: gitea
+  labels:
+    app: gitea-runner-dind
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitea-runner-dind
+  template:
+    metadata:
+      labels:
+        app: gitea-runner-dind
+    spec:
+      serviceAccountName: gitea-runner
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: dind
+          image: docker:27-dind
+          securityContext:
+            privileged: true
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: /certs
+          volumeMounts:
+            - name: docker-certs
+              mountPath: /certs/client
+            - name: docker-data
+              mountPath: /var/lib/docker
+        - name: runner
+          image: gitea/act_runner:latest
+          env:
+            - name: DOCKER_HOST
+              value: tcp://localhost:2376
+            - name: DOCKER_TLS_VERIFY
+              value: "1"
+            - name: DOCKER_CERT_PATH
+              value: /certs/client
+            - name: GITEA_INSTANCE_URL
+              value: "https://{{ gitea_hostname }}"
+            - name: GITEA_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-runner-secret
+                  key: token
+            - name: GITEA_RUNNER_NAME
+              value: k3s-dind-runner
+            - name: CONFIG_FILE
+              value: /etc/runner/config.yaml
+          volumeMounts:
+            - name: docker-certs
+              mountPath: /certs/client
+              readOnly: true
+            - name: runner-data
+              mountPath: /data
+            - name: runner-config
+              mountPath: /etc/runner
+            - name: tmp-cache
+              mountPath: /tmp/cache
+      volumes:
+        - name: docker-certs
+          emptyDir: {}
+        - name: docker-data
+          persistentVolumeClaim:
+            claimName: docker-data-pvc
+        - name: runner-data
+          emptyDir: {}
+        - name: runner-config
+          configMap:
+            name: gitea-runner-config
+        - name: tmp-cache
+          emptyDir: {}

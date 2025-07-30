@@ -1,0 +1,47 @@
+- name: Install and Configure Kata Containers
+  hosts: all
+  become: true
+  gather_facts: true # Gathers ansible_distribution
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Add Kata Containers GPG key
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/kata-containers/kata-containers/main/tools/packaging/kata-containers-release.key"
+        dest: /etc/apt/trusted.gpg.d/kata-containers-release.asc
+        mode: '0644'
+
+    - name: Add Kata Containers repository
+      ansible.builtin.apt_repository:
+        repo: "deb http://download.opensuse.org/repositories/home:/katacontainers:/releases:/x86_64:/stable-3.2/Debian_12/ /"
+        state: present
+        filename: kata-containers
+      when: ansible_distribution == 'Debian'
+
+    - name: Add Kata Containers repository for Ubuntu
+      ansible.builtin.apt_repository:
+        repo: "deb http://download.opensuse.org/repositories/home:/katacontainers:/releases:/x86_64:/stable-3.2/xUbuntu_22.04/ /"
+        state: present
+        filename: kata-containers
+      when: ansible_distribution == 'Ubuntu'
+
+    - name: Install Kata Containers packages
+      ansible.builtin.apt:
+        name:
+          - kata-runtime
+          - kata-ksm-throttler
+        update_cache: yes
+
+    - name: Add Kata to containerd config
+      ansible.builtin.blockinfile:
+        path: /etc/containerd/config.toml
+        block: |
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata]
+            runtime_type = "io.containerd.kata.v2"
+            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata.options]
+              ConfigPath = "/opt/kata/share/defaults/kata-containers/configuration.toml"
+
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted

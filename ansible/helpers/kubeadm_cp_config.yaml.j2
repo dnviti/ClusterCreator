@@ -1,0 +1,42 @@
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: v{{ kubernetes_medium_version }}
+clusterName: {{ cluster_config.cluster_name }}
+controlPlaneEndpoint: "{{ cluster_config.networking.kube_vip.vip_hostname }}:6443"
+apiServer:
+  certSANs:
+  - "{{ cluster_config.networking.kube_vip.vip }}"
+{% for host in groups['controlplane'] %}
+  - "{{ hostvars[host].ansible_host }}"
+{% endfor %}
+  - "{{ cluster_config.cluster_name }}"
+  - "{{ cluster_config.cluster_name }}.{{ cluster_config.networking.dns_search_domain }}"
+  - "{{ cluster_config.networking.kube_vip.vip_hostname }}"
+  - "{{ cluster_config.networking.kube_vip.vip_hostname }}.{{ cluster_config.networking.dns_search_domain }}"
+networking:
+  dnsDomain: cluster.local
+  serviceSubnet: {{ cluster_config.networking.ipv4.svc_cidr }}{% if cluster_config.networking.ipv6.enabled and cluster_config.networking.ipv6.dual_stack %},{{ cluster_config.networking.ipv6.svc_cidr }}{% endif %}
+
+  podSubnet: {{ cluster_config.networking.ipv4.pod_cidr }}{% if cluster_config.networking.ipv6.enabled and cluster_config.networking.ipv6.dual_stack %},{{ cluster_config.networking.ipv6.pod_cidr }}{% endif %}
+
+controllerManager:
+  extraArgs:
+    - name: node-cidr-mask-size-ipv4
+      value: "24"
+{% if cluster_config.networking.ipv6.enabled and cluster_config.networking.ipv6.dual_stack %}
+    - name: node-cidr-mask-size-ipv6
+      value: "96"
+{% endif %}
+
+{% if groups['etcd'] | default([]) | length > 0 %}
+etcd:
+  external:
+    endpoints:
+{% for host in groups['etcd'] %}
+    - https://{{ host }}:2379
+{% endfor %}
+    caFile: /etc/kubernetes/pki/etcd/ca.crt
+    certFile: /etc/kubernetes/pki/apiserver-etcd-client.crt
+    keyFile: /etc/kubernetes/pki/apiserver-etcd-client.key
+{% endif %}

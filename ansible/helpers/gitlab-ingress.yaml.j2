@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitlab-ingress
+  namespace: gitlab
+  annotations:
+    cert-manager.io/cluster-issuer: custom-ca-issuer
+spec:
+  ingressClassName: "{{ cluster_config.ingress_controller }}"
+  rules:
+  - host: "gitlab.{{ cluster_config.apps_domain }}"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gitlab-webservice-default
+            port:
+              number: 8181
+  tls:
+  - hosts:
+    - "gitlab.{{ cluster_config.apps_domain }}"
+    secretName: gitlab-tls

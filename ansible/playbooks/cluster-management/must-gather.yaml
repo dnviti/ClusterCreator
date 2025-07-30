@@ -1,0 +1,102 @@
+- name: Gather Kubernetes cluster information
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Get all resources in all namespaces
+      ansible.builtin.command:
+        cmd: "kubectl get all --all-namespaces -o yaml"
+      register: all_resources
+
+    - name: Save all resources to a file
+      ansible.builtin.copy:
+        content: "{{ all_resources.stdout }}"
+        dest: "{{ log_dir }}/all_resources.yaml"
+
+    - name: Get all pod logs
+      ansible.builtin.shell:
+        cmd: |
+          for ns in $(kubectl get ns -o jsonpath='{.items[*].metadata.name}'); do
+            for pod in $(kubectl get pods -n $ns -o jsonpath='{.items[*].metadata.name}'); do
+              kubectl logs -n $ns $pod --all-containers > "{{ log_dir }}/$ns-$pod.log" 2>/dev/null || true
+            done
+          done
+      args:
+        executable: /bin/bash
+      ignore_errors: true
+
+    - name: Get Cilium status
+      ansible.builtin.shell:
+        cmd: |
+          CILIUM_POD=$(kubectl -n kube-system get pods -l k8s-app=cilium -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          if [ -n "$CILIUM_POD" ]; then
+            kubectl -n kube-system exec $CILIUM_POD -- cilium status > "{{ log_dir }}/cilium-status.log" 2>/dev/null || true
+          fi
+      args:
+        executable: /bin/bash
+      register: cilium_status_output
+      changed_when: cilium_status_output.rc == 0
+      ignore_errors: true
+
+- name: Gather node-specific information
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create a temporary directory on the remote host
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: must_gather_
+      register: remote_temp_dir
+
+    - name: Get dmesg output
+      ansible.builtin.shell: "dmesg > {{ remote_temp_dir.path }}/dmesg.log"
+    - name: Fetch dmesg log
+      ansible.builtin.fetch:
+        src: "{{ remote_temp_dir.path }}/dmesg.log"
+        dest: "{{ log_dir }}/{{ inventory_hostname }}-dmesg.log"
+        flat: yes
+
+    - name: Get journalctl output
+      ansible.builtin.shell: "journalctl > {{ remote_temp_dir.path }}/journalctl.log"
+    - name: Fetch journalctl log
+      ansible.builtin.fetch:
+        src: "{{ remote_temp_dir.path }}/journalctl.log"
+        dest: "{{ log_dir }}/{{ inventory_hostname }}-journalctl.log"
+        flat: yes
+
+    - name: Get iptables output
+      ansible.builtin.shell: "iptables-save > {{ remote_temp_dir.path }}/iptables.log"
+    - name: Fetch iptables log
+      ansible.builtin.fetch:
+        src: "{{ remote_temp_dir.path }}/iptables.log"
+        dest: "{{ log_dir }}/{{ inventory_hostname }}-iptables.log"
+        flat: yes
+
+    - name: Get network interface configuration
+      ansible.builtin.shell: "ip a > {{ remote_temp_dir.path }}/ip-a.log"
+    - name: Fetch network interface log
+      ansible.builtin.fetch:
+        src: "{{ remote_temp_dir.path }}/ip-a.log"
+        dest: "{{ log_dir }}/{{ inventory_hostname }}-ip-a.log"
+        flat: yes
+
+    - name: Get Cilium agent logs for this node
+      delegate_to: localhost
+      become: false
+      ansible.builtin.shell: |
+        CILIUM_POD=$(kubectl -n kube-system get pods -l k8s-app=cilium --field-selector spec.nodeName={{ inventory_hostname }} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [ -n "$CILIUM_POD" ]; then
+          kubectl -n kube-system logs $CILIUM_POD > "{{ log_dir }}/{{ inventory_hostname }}-cilium-agent.log" 2>/dev/null || true
+        fi
+      args:
+        executable: /bin/bash
+      register: cilium_log_result
+      changed_when: cilium_log_result.rc == 0
+      ignore_errors: true
+
+    - name: Clean up the remote temporary directory
+      ansible.builtin.file:
+        path: "{{ remote_temp_dir.path }}"
+        state: absent

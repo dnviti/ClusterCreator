@@ -1,0 +1,11 @@
+[all:vars]
+cluster_name={{ cluster_name }}
+ansible_python_interpreter=auto_silent
+
+{% for class_name, class_config in node_classes.items() %}
+[{{ class_name }}]
+{% for i in range(class_config.count) %}
+{{ cluster_name }}-{{ class_name }}-{{ i }} ansible_host={{ networking.ipv4.subnet_prefix }}.{{ class_config.start_ip + i }} ipv4={{ networking.ipv4.subnet_prefix }}.{{ class_config.start_ip + i }} ipv6={{ networking.ipv6.subnet_prefix }}::{{ class_config.start_ip + i }} labels="{% for label in class_config.labels %}{{ label }}{% if not loop.last %},{% endif %}{% endfor %}" taints="{% for taint in class_config.taints %}{{ taint }}{% if not loop.last %},{% endif %}{% endfor %}"
+{% endfor %}
+
+{% endfor %}

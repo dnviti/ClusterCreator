@@ -1,0 +1,19 @@
+- name: Deploy Traefik Ingress Controller
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Add Traefik Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add traefik https://helm.traefik.io/traefik
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Install Traefik Ingress Controller
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install traefik traefik/traefik
+          --namespace traefik --create-namespace

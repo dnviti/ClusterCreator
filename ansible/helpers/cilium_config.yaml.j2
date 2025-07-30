@@ -1,0 +1,32 @@
+cluster:
+  id: {{ cluster_config.cluster_id }}
+  name: {{ cluster_config.cluster_name }}
+operator:
+  replicas: {{ replica_count }}
+rolloutCiliumPods: true
+ipv4:
+  enabled: true
+ipv6:
+  enabled: {% if cluster_config.networking.ipv6.enabled and cluster_config.networking.ipv6.dual_stack %}true{% else %}false{% endif %}
+
+ipam:
+  mode: kubernetes
+externalIPs:
+  enabled: true
+nodePort:
+  enabled: true
+hostPort:
+  enabled: true
+bpf:
+  masquerade: false # not needed when using metallb
+cni:
+  exclusive: false  # needed for some mesh providers (Istio Ambient)
+k8sServiceHost: {{ cluster_config.networking.kube_vip.vip_hostname }}
+k8sServicePort: 6443
+kubeProxyReplacement: true
+hubble:
+  enabled: true
+  ui:
+    enabled: true
+  relay:
+    enabled: true

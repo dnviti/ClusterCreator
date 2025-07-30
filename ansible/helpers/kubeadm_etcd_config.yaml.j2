@@ -1,0 +1,23 @@
+apiVersion: "kubeadm.k8s.io/v1beta3"
+kind: InitConfiguration
+nodeRegistration:
+    name: "{{ item }}"
+localAPIEndpoint:
+    advertiseAddress: "{{ hostvars[item].ansible_host }}"
+---
+apiVersion: "kubeadm.k8s.io/v1beta3"
+kind: ClusterConfiguration
+etcd:
+    local:
+        serverCertSANs:
+        - "{{ hostvars[item].ansible_host }}"
+        peerCertSANs:
+        - "{{ hostvars[item].ansible_host }}"
+        extraArgs:
+            initial-cluster: "{{ initial_cluster }}"
+            initial-cluster-state: new
+            name: "{{ item }}"
+            listen-peer-urls: "https://{{ hostvars[item].ansible_host }}:2380"
+            listen-client-urls: "https://{{ hostvars[item].ansible_host }}:2379"
+            advertise-client-urls: "https://{{ hostvars[item].ansible_host }}:2379"
+            initial-advertise-peer-urls: "https://{{ hostvars[item].ansible_host }}:2380"

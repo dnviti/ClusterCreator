@@ -1,0 +1,104 @@
+- name: Prepare disks for Longhorn on relevant nodes
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Check if the specified storage disk exists
+      ansible.builtin.stat:
+        path: "{{ cluster_config.storage_disk }}"
+      register: storage_disk_stat
+
+    - name: Create a filesystem on the storage disk if it exists
+      community.general.filesystem:
+        fstype: ext4
+        dev: "{{ cluster_config.storage_disk }}"
+        force: no # Do not reformat if a filesystem already exists
+      when: storage_disk_stat.stat.exists
+
+    - name: Create the mount point for Longhorn
+      ansible.builtin.file:
+        path: /var/lib/longhorn
+        state: directory
+        mode: '0755'
+      when: storage_disk_stat.stat.exists
+
+    - name: Mount the storage disk for Longhorn and add to fstab
+      ansible.posix.mount:
+        path: /var/lib/longhorn
+        src: "{{ cluster_config.storage_disk }}"
+        fstype: ext4
+        state: mounted
+      when: storage_disk_stat.stat.exists
+
+- name: Install Longhorn Helm Chart
+  hosts: controlplane[0]
+  become: true
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Add Longhorn Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add longhorn https://charts.longhorn.io
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Create Longhorn namespace
+      kubernetes.core.k8s:
+        name: longhorn-system
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+
+    - name: Install Longhorn
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install longhorn longhorn/longhorn
+          --namespace longhorn-system
+          --set persistence.defaultClassReplicaCount=1
+          --set defaultSettings.defaultDataPath="/var/lib/longhorn"
+          --set defaultSettings.defaultDataLocality="best-effort"
+          --kubeconfig /etc/kubernetes/admin.conf
+
+    - name: "Set default longhorn_ui_hostname if not provided"
+      set_fact:
+        longhorn_ui_hostname: "{{ cluster_config.longhorn_ui_hostname | default('longhorn.' + cluster_config.cluster_name + '.' + cluster_config.networking.dns_search_domain, true) }}"
+
+    - name: Generate Longhorn Ingress Yaml
+      ansible.builtin.template:
+        src: ../../helpers/longhorn-ingress.yaml.j2
+        dest: "/tmp/longhorn-ingress.yaml"
+      vars:
+        longhorn_ui_hostname: "{{ longhorn_ui_hostname }}"
+      when:
+        - cluster_config.ingress_controller in ['nginx', 'traefik']
+
+    - name: Create Longhorn Ingress
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/longhorn-ingress.yaml --kubeconfig /etc/kubernetes/admin.conf
+      when:
+        - cluster_config.ingress_controller in ['nginx', 'traefik']
+
+    - name: Create Longhorn Certificate
+      when: cluster_config.cert_manager_enabled | default(false)
+      block:
+        - name: Generate Longhorn Certificate Yaml
+          ansible.builtin.template:
+            src: ../../helpers/certificate.yaml.j2
+            dest: "/tmp/longhorn-certificate.yaml"
+          vars:
+            name: longhorn-certificate
+            namespace: longhorn-system
+            secret_name: longhorn-tls
+            issuer_name: custom-ca-issuer
+            common_name: "{{ longhorn_ui_hostname }}"
+
+        - name: Create Longhorn Certificate
+          ansible.builtin.command:
+            cmd: kubectl apply -f /tmp/longhorn-certificate.yaml --kubeconfig /etc/kubernetes/admin.conf
+          changed_when: true

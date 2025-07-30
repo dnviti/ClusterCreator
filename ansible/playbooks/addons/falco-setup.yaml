@@ -1,0 +1,23 @@
+- name: Deploy Falco
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  # This condition ensures the standard Falco installation only runs if gVisor is not the selected runtime.
+  when: cluster_config.runtime | default('runc') != 'gvisor'
+  tasks:
+    - name: Add Falco Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add falcosecurity https://falcosecurity.github.io/charts
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Install Falco
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install falco falcosecurity/falco
+          --namespace falco --create-namespace
+          --set falco.privileged=true
+          --set tty=true

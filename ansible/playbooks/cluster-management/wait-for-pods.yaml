@@ -1,0 +1,10 @@
+- name: Wait for all system pods to be ready
+  hosts: controlplane[0]
+  gather_facts: false
+  tasks:
+    - name: Wait for all pods in kube-system to be ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Ready pod --all --all-namespaces --timeout=3600s
+      changed_when: false
+      register: wait_result
+      failed_when: wait_result.rc != 0

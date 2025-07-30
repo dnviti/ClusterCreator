@@ -1,0 +1,142 @@
+- name: Deploy Gitea
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Add Gitea Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add gitea-charts https://dl.gitea.io/charts/
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Check if Gitea is already installed
+      ansible.builtin.command:
+        cmd: helm status gitea -n gitea
+      register: gitea_status
+      changed_when: false
+      ignore_errors: true
+
+    - name: Create Gitea namespace
+      when: gitea_status.rc != 0
+      kubernetes.core.k8s:
+        name: gitea
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: "Set default gitea_hostname if not provided"
+      set_fact:
+        gitea_hostname: "{{ cluster_config.git_platform.hostname | default('gitea.' + cluster_config.cluster_name + '.' + cluster_config.networking.dns_search_domain, true) }}"
+      when: cluster_config.git_platform is defined and cluster_config.git_platform.hostname is defined
+
+    - name: Generate random password for Gitea admin
+      when: gitea_status.rc != 0
+      ansible.builtin.command:
+        cmd: openssl rand -base64 16
+      register: gitea_admin_password_result
+      changed_when: false
+
+    - name: Set Gitea admin password fact
+      when: gitea_status.rc != 0
+      set_fact:
+        gitea_admin_password: "{{ gitea_admin_password_result.stdout }}"
+
+    - name: Install Gitea
+      when: gitea_status.rc != 0
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install gitea gitea-charts/gitea
+          --namespace gitea
+          --set gitea.admin.username=admin
+          --set gitea.admin.password={{ gitea_admin_password }}
+          --set service.http.port=3000
+          --set ingress.enabled=false
+          --set gitea.config.server.ROOT_URL=https://{{ gitea_hostname }}
+          --set persistence.storageClass=longhorn
+
+    - name: Wait for Gitea PVC to be bound
+      kubernetes.core.k8s_info:
+        kind: PersistentVolumeClaim
+        name: gitea-shared-storage
+        namespace: gitea
+      register: gitea_pvc
+      until: "gitea_pvc.resources | length > 0 and gitea_pvc.resources[0].status.phase == 'Bound'"
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Fail with storage diagnostics if PVC is not bound
+      when: gitea_pvc.resources | length == 0 or gitea_pvc.resources[0].status.phase != 'Bound'
+      block:
+        - name: Get PVC details
+          ansible.builtin.command:
+            cmd: "kubectl get pvc gitea-shared-storage -n gitea -o yaml"
+          register: pvc_details
+          changed_when: false
+
+        - name: Get StorageClass details
+          ansible.builtin.command:
+            cmd: "kubectl get storageclass -o yaml"
+          register: sc_details
+          changed_when: false
+
+        - name: Fail with diagnostic information
+          ansible.builtin.fail:
+            msg: |
+              Gitea PVC 'gitea-shared-storage' failed to bind. This is likely a storage issue.
+              PVC Status: {{ (gitea_pvc.resources[0].status.phase | default('Not Found')) }}
+              --- PVC Details ---
+              {{ pvc_details.stdout | default('Could not retrieve PVC details.') }}
+              --- Available StorageClasses ---
+              {{ sc_details.stdout | default('Could not retrieve StorageClass details.') }}
+
+    - name: Wait for Gitea pod to be ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=gitea -n gitea --timeout=5m
+      changed_when: false
+
+    - name: Generate Gitea Ingress Yaml
+      ansible.builtin.template:
+        src: ../../helpers/gitea-ingress.yaml.j2
+        dest: "/tmp/gitea-ingress.yaml"
+      vars:
+        gitea_hostname: "{{ gitea_hostname }}"
+      when:
+        - cluster_config.ingress_controller in ['nginx', 'traefik']
+        - cluster_config.git_platform is defined
+        - cluster_config.git_platform.provider == 'gitea'
+
+    - name: Create Gitea Ingress
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/gitea-ingress.yaml
+      when:
+        - cluster_config.ingress_controller in ['nginx', 'traefik']
+        - cluster_config.git_platform is defined
+        - cluster_config.git_platform.provider == 'gitea'
+
+    - name: Create Gitea Certificate
+      when: cluster_config.cert_manager_enabled | default(false)
+      block:
+        - name: Generate Gitea Certificate Yaml
+          ansible.builtin.template:
+            src: ../../helpers/certificate.yaml.j2
+            dest: "/tmp/gitea-certificate.yaml"
+          vars:
+            name: gitea-certificate
+            namespace: gitea
+            secret_name: gitea-tls
+            issuer_name: custom-ca-issuer
+            common_name: "{{ gitea_hostname }}"
+
+        - name: Create Gitea Certificate
+          ansible.builtin.command:
+            cmd: kubectl apply -f /tmp/gitea-certificate.yaml
+          changed_when: true
+
+    - name: Display Gitea initial admin credentials
+      when: gitea_status.rc != 0
+      ansible.builtin.debug:
+        msg: "Gitea initial admin user: admin / {{ gitea_admin_password }}"

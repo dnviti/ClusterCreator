@@ -1,0 +1,65 @@
+- name: Uninstall All User Addons
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    # Git Platforms
+    - name: Uninstall Gitea
+      when: cluster_config.git_platform is defined and cluster_config.git_platform.provider == "gitea"
+      block:
+        - name: Uninstall Gitea helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall gitea -n gitea
+          ignore_errors: yes
+        - name: Uninstall Gitea Runner
+          when: cluster_config.git_platform.runners_enabled | default(false)
+          ansible.builtin.command:
+            cmd: helm uninstall gitea-runner -n gitea
+          ignore_errors: yes
+        - name: Delete Gitea Namespace
+          ansible.builtin.command:
+            cmd: kubectl delete namespace gitea --ignore-not-found=true
+          ignore_errors: yes
+
+    - name: Uninstall GitLab
+      when: cluster_config.git_platform is defined and cluster_config.git_platform.provider == "gitlab"
+      block:
+        - name: Uninstall GitLab helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall gitlab -n gitlab
+          ignore_errors: yes
+        - name: Uninstall GitLab Runner
+          when: cluster_config.git_platform.runners_enabled | default(false)
+          ansible.builtin.command:
+            cmd: helm uninstall gitlab-runner -n gitlab
+          ignore_errors: yes
+        - name: Delete GitLab Namespace
+          ansible.builtin.command:
+            cmd: kubectl delete namespace gitlab --ignore-not-found=true
+          ignore_errors: yes
+
+    - name: Uninstall GitHub Runner Controller
+      when: cluster_config.git_platform is defined and cluster_config.git_platform.provider == "github" and cluster_config.git_platform.runners_enabled | default(false)
+      block:
+        - name: Uninstall GitHub Runner Controller helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall actions-runner-controller -n github-runner
+          ignore_errors: yes
+        - name: Delete GitHub Runner Namespace
+          ansible.builtin.command:
+            cmd: kubectl delete namespace github-runner --ignore-not-found=true
+          ignore_errors: yes
+
+    # GitOps
+    - name: Uninstall ArgoCD
+      when: cluster_config.gitops is defined and cluster_config.gitops.argocd_enabled | default(false)
+      block:
+        - name: Uninstall ArgoCD helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall argocd -n argocd
+          ignore_errors: yes
+        - name: Delete ArgoCD Namespace
+          ansible.builtin.command:
+            cmd: kubectl delete namespace argocd --ignore-not-found=true
+          ignore_errors: yes

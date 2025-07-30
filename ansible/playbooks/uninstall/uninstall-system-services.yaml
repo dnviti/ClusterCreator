@@ -1,0 +1,157 @@
+- name: Uninstall All System Services
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    # --- Uninstall Optional Services ---
+    - name: Uninstall Longhorn
+      when: cluster_config.storage_provisioner is defined and cluster_config.storage_provisioner == "longhorn"
+      block:
+        - name: Uninstall Longhorn helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall longhorn -n longhorn-system
+          ignore_errors: yes
+        - name: Delete Longhorn Namespace
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: longhorn-system
+          ignore_errors: yes
+
+    - name: Uninstall Ceph
+      when: cluster_config.storage_provisioner is defined and cluster_config.storage_provisioner == "ceph"
+      block:
+        - name: Uninstall Ceph helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall rook-ceph -n rook-ceph
+          ignore_errors: yes
+        - name: Delete Ceph Namespace
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: rook-ceph
+          ignore_errors: yes
+
+    - name: Uninstall Local Path Provisioner
+      when: cluster_config.storage_provisioner is defined and cluster_config.storage_provisioner == "local-path"
+      ansible.builtin.command:
+        cmd: kubectl delete -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v{{ local_path_provisioner_version }}/deploy/local-path-storage.yaml --ignore-not-found=true
+      ignore_errors: yes
+
+    - name: Uninstall NGINX Ingress Controller
+      when: cluster_config.ingress_controller is defined and cluster_config.ingress_controller == "nginx"
+      block:
+        - name: Uninstall NGINX Ingress Controller helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall ingress-nginx -n ingress-nginx
+          ignore_errors: yes
+        - name: Delete Ingress-NGINX Namespace
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: ingress-nginx
+          ignore_errors: yes
+
+    - name: Uninstall Traefik Ingress Controller
+      when: cluster_config.ingress_controller is defined and cluster_config.ingress_controller == "traefik"
+      block:
+        - name: Uninstall Traefik Ingress Controller helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall traefik -n traefik
+          ignore_errors: yes
+        - name: Delete Traefik Namespace
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: traefik
+          ignore_errors: yes
+
+    - name: Uninstall cert-manager
+      when: cluster_config.cert_manager_enabled | default(false)
+      block:
+        - name: Uninstall cert-manager helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall cert-manager -n cert-manager
+          ignore_errors: yes
+        - name: Delete cert-manager Namespace
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: cert-manager
+          ignore_errors: yes
+
+    # --- Uninstall Base Services ---
+    - name: Uninstall Kubelet Serving Cert Approver
+      block:
+        - name: Uninstall kubelet-serving-cert-approver helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall kubelet-serving-cert-approver -n kubelet-serving-cert-approver
+          ignore_errors: yes
+        - name: Delete kubelet-serving-cert-approver Namespace
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: kubelet-serving-cert-approver
+          ignore_errors: yes
+
+    - name: Uninstall MetalLB
+      block:
+        - name: Delete MetalLB Configs
+          ansible.builtin.command:
+            cmd: kubectl delete -f ../../tmp/{{ cluster_name }}/metallb_configs.yaml --ignore-not-found=true
+        - name: Delete MetalLB manifests
+          ansible.builtin.command:
+            cmd: "kubectl delete -f https://raw.githubusercontent.com/metallb/metallb/v{{ metallb_version }}/config/manifests/metallb-native.yaml --ignore-not-found=true"
+      ignore_errors: yes
+
+    - name: Uninstall CoreDNS
+      block:
+        - name: Delete CoreDNS Deployment
+          kubernetes.core.k8s:
+            state: absent
+            kind: Deployment
+            name: coredns
+            namespace: kube-system
+        - name: Delete CoreDNS Service
+          kubernetes.core.k8s:
+            state: absent
+            kind: Service
+            name: kube-dns
+            namespace: kube-system
+        - name: Delete CoreDNS ConfigMap
+          kubernetes.core.k8s:
+            state: absent
+            kind: ConfigMap
+            name: coredns
+            namespace: kube-system
+        - name: Delete CoreDNS ClusterRoleBinding
+          kubernetes.core.k8s:
+            state: absent
+            kind: ClusterRoleBinding
+            name: system:coredns
+        - name: Delete CoreDNS ClusterRole
+          kubernetes.core.k8s:
+            state: absent
+            kind: ClusterRole
+            name: system:coredns
+        - name: Delete CoreDNS ServiceAccount
+          kubernetes.core.k8s:
+            state: absent
+            kind: ServiceAccount
+            name: coredns
+            namespace: kube-system
+      ignore_errors: yes
+
+    - name: Uninstall Cilium
+      block:
+        - name: Uninstall Cilium helm chart
+          ansible.builtin.command:
+            cmd: helm uninstall cilium -n kube-system
+          ignore_errors: yes

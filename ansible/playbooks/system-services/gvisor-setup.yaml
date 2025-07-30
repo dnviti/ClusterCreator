@@ -1,0 +1,30 @@
+- name: Install and Configure gVisor
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Download runsc binary
+      ansible.builtin.get_url:
+        url: "https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc"
+        dest: "/usr/local/bin/runsc"
+        mode: "0755"
+
+    - name: Download gvisor-containerd-shim binary
+      ansible.builtin.get_url:
+        url: "https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/gvisor-containerd-shim"
+        dest: "/usr/local/bin/gvisor-containerd-shim"
+        mode: "0755"
+
+    - name: Add gVisor to containerd config
+      ansible.builtin.blockinfile:
+        path: /etc/containerd/config.toml
+        block: |
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.gvisor]
+            runtime_type = "io.containerd.runsc.v1"
+
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted

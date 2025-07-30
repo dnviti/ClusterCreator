@@ -1,0 +1,76 @@
+- name: Prepare disks for Local Path Provisioner on relevant nodes
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Check if the specified storage disk exists
+      ansible.builtin.stat:
+        path: "{{ cluster_config.storage_disk }}"
+      register: storage_disk_stat
+
+    - name: Create a filesystem on the storage disk if it exists
+      community.general.filesystem:
+        fstype: ext4
+        dev: "{{ cluster_config.storage_disk }}"
+        force: no # Do not reformat if a filesystem already exists
+      when: storage_disk_stat.stat.exists
+
+    - name: Create the mount point for Local Path Provisioner
+      ansible.builtin.file:
+        path: /opt/local-path-provisioner
+        state: directory
+        mode: '0755'
+      when: storage_disk_stat.stat.exists
+
+    - name: Mount the storage disk for Local Path Provisioner and add to fstab
+      ansible.posix.mount:
+        path: /opt/local-path-provisioner
+        src: "{{ cluster_config.storage_disk }}"
+        fstype: ext4
+        state: mounted
+      when: storage_disk_stat.stat.exists
+
+- name: Deploy Local StorageClasses
+  hosts: controlplane[0]
+  become: true
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+    default_storage_class_name: "local-path"
+  tasks:
+    - name: Generate Non-Auto-Provisioning Local StorageClass Yaml
+      ansible.builtin.template:
+        src: ../../helpers/local_storageclass.yaml.j2
+        dest: "/tmp/local_storageclass.yaml"
+
+    - name: Create Non-Auto-Provisioning Local StorageClass
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/local_storageclass.yaml --kubeconfig /etc/kubernetes/admin.conf
+
+    - name: Create Auto-Provisioning Local StorageClass
+      ansible.builtin.command:
+        cmd: kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v{{ local_path_provisioner_version }}/deploy/local-path-storage.yaml --kubeconfig /etc/kubernetes/admin.conf
+
+    - name: Check if a default storage class exists by parsing kubectl output
+      ansible.builtin.command:
+        cmd: kubectl get storageclass --kubeconfig /etc/kubernetes/admin.conf
+      register: storageclass_output
+
+    - name: Set default_storage_class_exists based on storageclass output
+      set_fact:
+        default_storage_class_exists: "{{ storageclass_output.stdout_lines | select('search', '\\(default\\)') | list | length > 0 }}"
+
+    - name: Set default storage class (if none exists)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ default_storage_class_name }}"
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "true"
+      when: not default_storage_class_exists

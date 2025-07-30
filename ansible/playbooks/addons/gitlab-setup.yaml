@@ -1,0 +1,89 @@
+- name: Deploy GitLab
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Add GitLab Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add gitlab https://charts.gitlab.io/
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Create GitLab namespace
+      kubernetes.core.k8s:
+        name: gitlab
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: "Set default gitlab_hostname if not provided"
+      set_fact:
+        gitlab_hostname: "{{ cluster_config.git_platform.hostname | default('gitlab.' + cluster_config.cluster_name + '.' + cluster_config.networking.dns_search_domain, true) }}"
+      when: cluster_config.git_platform is defined and cluster_config.git_platform.hostname is defined
+
+    - name: Install GitLab
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install gitlab gitlab/gitlab
+          --namespace gitlab
+          --set global.hosts.domain={{ gitlab_hostname }}
+          --set global.edition=ce
+          --set gitlab-runner.install=false
+          --set gitlab.webservice.ingress.enabled=false
+          --set prometheus.install=false
+          --set alertmanager.install=false
+          --set gitlab-kas.enabled=false
+          --set Kaskade.enabled=false
+          --set minio.enabled=false
+          --set postgresql.image.tag=13.6.0
+
+    - name: Generate GitLab Ingress Yaml
+      ansible.builtin.template:
+        src: ../../helpers/gitlab-ingress.yaml.j2
+        dest: "/tmp/gitlab-ingress.yaml"
+      vars:
+        gitlab_hostname: "{{ gitlab_hostname }}"
+      when:
+        - cluster_config.ingress_controller in ['nginx', 'traefik']
+        - cluster_config.git_platform is defined
+        - cluster_config.git_platform.provider == 'gitlab'
+
+    - name: Create GitLab Ingress
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/gitlab-ingress.yaml
+      when:
+        - cluster_config.ingress_controller in ['nginx', 'traefik']
+        - cluster_config.git_platform is defined
+        - cluster_config.git_platform.provider == 'gitlab'
+
+    - name: Create GitLab Certificate
+      when: cluster_config.cert_manager_enabled | default(false)
+      block:
+        - name: Generate GitLab Certificate Yaml
+          ansible.builtin.template:
+            src: ../../helpers/certificate.yaml.j2
+            dest: "/tmp/gitlab-certificate.yaml"
+          vars:
+            name: gitlab-certificate
+            namespace: gitlab
+            secret_name: gitlab-tls
+            issuer_name: custom-ca-issuer
+            common_name: "{{ gitlab_hostname }}"
+
+        - name: Create GitLab Certificate
+          ansible.builtin.command:
+            cmd: kubectl apply -f /tmp/gitlab-certificate.yaml
+          changed_when: true
+
+    - name: Get initial GitLab root password
+      ansible.builtin.shell:
+        cmd: "kubectl -n gitlab get secret gitlab-gitlab-initial-root-password -o jsonpath='{.data.password}' | base64 -d"
+      register: gitlab_password
+      changed_when: false
+
+    - name: Display GitLab initial root password
+      ansible.builtin.debug:
+        msg: "GitLab initial root password: {{ gitlab_password.stdout }}"

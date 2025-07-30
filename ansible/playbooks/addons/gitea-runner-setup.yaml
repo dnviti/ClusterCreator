@@ -1,0 +1,95 @@
+- name: Deploy Gitea Runner with Docker-in-Docker
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+    gitea_runner_token: "{{ lookup('env', 'GITEA_RUNNER_TOKEN') }}"
+  tasks:
+    - name: Check if Gitea Runner is already installed
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: gitea-runner-dind
+        namespace: gitea
+      register: gitea_runner_status
+
+    - name: Set default gitea_hostname if not provided
+      set_fact:
+        gitea_hostname: "{{ cluster_config.git_platform.hostname | default('gitea.' + cluster_config.cluster_name + '.' + cluster_config.networking.dns_search_domain, true) }}"
+      when: cluster_config.git_platform is defined and cluster_config.git_platform.hostname is defined
+
+    - name: Deploy Gitea Runner resources
+      when: gitea_runner_status.resources | length == 0
+      block:
+        - name: Create Gitea Runner Secret
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: gitea-runner-secret
+                namespace: gitea
+              stringData:
+                token: "{{ gitea_runner_token }}"
+
+        - name: Create Docker Data PVC for Runner
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: docker-data-pvc
+                namespace: gitea
+              spec:
+                accessModes: [ "ReadWriteOnce" ]
+                storageClassName: longhorn
+                resources:
+                  requests:
+                    storage: 15Gi
+
+        - name: Create Gitea Runner ConfigMap
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: gitea-runner-config
+                namespace: gitea
+              data:
+                config.yaml: |
+                  log:
+                    level: info
+                  runner:
+                    file: .runner
+                    capacity: 5
+                    timeout: 3h
+                    insecure: false
+                    fetch_timeout: 10s
+                    fetch_interval: 2s
+                  cache:
+                    enabled: true
+                    dir: /tmp/cache
+                  container:
+                    docker_host: "tcp://localhost:2376"
+
+        - name: Create Gitea Runner ServiceAccount
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ServiceAccount
+              metadata:
+                name: gitea-runner
+                namespace: gitea
+
+        - name: Create Gitea Runner Deployment
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ lookup('template', '../../helpers/gitea-runner-deployment.yaml.j2') }}"
+
+    - name: Wait for runner deployment to be ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Available deployment/gitea-runner-dind -n gitea --timeout=5m
+      changed_when: false

@@ -1,0 +1,25 @@
+- name: Deploy GitLab Runner
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: "Set default gitlab_hostname if not provided"
+      set_fact:
+        gitlab_hostname: "{{ cluster_config.git_platform.hostname | default('gitlab.' + cluster_config.cluster_name + '.' + cluster_config.networking.dns_search_domain, true) }}"
+      when: cluster_config.git_platform is defined and cluster_config.git_platform.hostname is defined
+
+    - name: Get GitLab runner registration token
+      ansible.builtin.shell:
+        cmd: "kubectl -n gitlab exec -it $(kubectl -n gitlab get pods -l app=webservice -o jsonpath='{.items[0].metadata.name}') -- gitlab-rails runner -e 'puts Gitlab::CurrentSettings.current_application_settings.runners_registration_token'"
+      register: gitlab_runner_token
+      changed_when: false
+
+    - name: Install GitLab Runner
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install gitlab-runner gitlab/gitlab-runner
+          --namespace gitlab
+          --set gitlabUrl=http://gitlab-webservice-default.gitlab.svc.cluster.local:8080
+          --set runnerRegistrationToken={{ gitlab_runner_token.stdout }}
+          --set rbac.create=true

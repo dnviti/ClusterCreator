@@ -1,0 +1,41 @@
+- name: Deploy GitHub Runner Controller
+  hosts: controlplane[0]
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Add actions-runner-controller Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add actions-runner-controller https://actions-runner-controller.github.io/actions-runner-controller
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Create GitHub runner namespace
+      kubernetes.core.k8s:
+        name: github-runner
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Create GitHub auth secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: controller-manager
+            namespace: github-runner
+          stringData:
+            github_token: "{{ github_auth_token }}"
+
+    - name: Install actions-runner-controller
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install actions-runner-controller actions-runner-controller/actions-runner-controller
+          --namespace github-runner
+          --set authSecret.create=false
+          --set authSecret.name=controller-manager
+          --set githubOwner={{ cluster_config.git_platform.github_owner }}

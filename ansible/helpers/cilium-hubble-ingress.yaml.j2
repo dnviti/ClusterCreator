@@ -1,0 +1,25 @@
+# ansible/helpers/cilium-hubble-ingress.yaml.j2
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hubble-ui-ingress
+  namespace: kube-system
+  annotations:
+    cert-manager.io/cluster-issuer: custom-ca-issuer
+spec:
+  ingressClassName: "{{ cluster_config.ingress_controller }}"
+  rules:
+  - host: "hubble.{{ cluster_config.apps_domain }}"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: hubble-ui
+            port:
+              number: 80
+  tls:
+  - hosts:
+    - "hubble.{{ cluster_config.apps_domain }}"
+    secretName: hubble-ui-tls

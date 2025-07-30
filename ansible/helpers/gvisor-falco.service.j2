@@ -1,0 +1,13 @@
+[Unit]
+Description=gVisor Falco integration service
+Requires=containerd.service
+After=containerd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/runsc --root /run/containerd/runsc/runsc-sandbox root -- --binary /usr/bin/falco --init-config /etc/falco/falco_init.yaml events --socket {{ falco_gvisor_socket }}
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

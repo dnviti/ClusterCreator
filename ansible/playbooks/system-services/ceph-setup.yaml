@@ -1,0 +1,64 @@
+- name: Prepare disks for Rook Ceph on relevant nodes
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Check if the specified storage disk exists
+      ansible.builtin.stat:
+        path: "{{ cluster_config.storage_disk }}"
+      register: storage_disk_stat
+
+    - name: Create a filesystem on the storage disk if it exists
+      community.general.filesystem:
+        fstype: ext4
+        dev: "{{ cluster_config.storage_disk }}"
+        force: no # Do not reformat if a filesystem already exists
+      when: storage_disk_stat.stat.exists
+
+    - name: Create the mount point for Rook Ceph
+      ansible.builtin.file:
+        path: /var/lib/rook
+        state: directory
+        mode: '0755'
+      when: storage_disk_stat.stat.exists
+
+    - name: Mount the storage disk for Rook Ceph and add to fstab
+      ansible.posix.mount:
+        path: /var/lib/rook
+        src: "{{ cluster_config.storage_disk }}"
+        fstype: ext4
+        state: mounted
+      when: storage_disk_stat.stat.exists
+
+- name: Install Rook Ceph Helm Chart
+  hosts: controlplane[0]
+  become: true
+  gather_facts: false
+  vars:
+    cluster_config: "{{ lookup('file', '../../tmp/{{ cluster_name }}/cluster_config.json') | from_json }}"
+  tasks:
+    - name: Add Rook Ceph Helm repository
+      ansible.builtin.command:
+        cmd: helm repo add rook-release https://charts.rook.io/release
+
+    - name: Update Helm repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Create Rook Ceph namespace
+      kubernetes.core.k8s:
+        name: rook-ceph
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+
+    - name: Install Rook Ceph Operator
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install rook-ceph rook-release/rook-ceph
+          --namespace rook-ceph
+          --set csi.enableRbdDriver=true
+          --kubeconfig /etc/kubernetes/admin.conf

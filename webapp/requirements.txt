@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+PyYAML
+python-multipart
+websockets
+python-hcl2

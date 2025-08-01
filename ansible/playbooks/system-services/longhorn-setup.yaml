@@ -32,7 +32,7 @@
         state: mounted
       when: storage_disk_stat.stat.exists
 
-- name: Install Longhorn Helm Chart
+- name: Install Longhorn Helm Chart and Configure StorageClass
   hosts: controlplane[0]
   become: true
   gather_facts: false
@@ -42,10 +42,12 @@
     - name: Add Longhorn Helm repository
       ansible.builtin.command:
         cmd: helm repo add longhorn https://charts.longhorn.io
+      changed_when: false
 
     - name: Update Helm repositories
       ansible.builtin.command:
         cmd: helm repo update
+      changed_when: false
 
     - name: Create Longhorn namespace
       kubernetes.core.k8s:
@@ -64,9 +66,10 @@
           --set defaultSettings.defaultDataPath="/var/lib/longhorn"
           --set defaultSettings.defaultDataLocality="best-effort"
           --kubeconfig /etc/kubernetes/admin.conf
+      changed_when: true
 
     - name: "Set default longhorn_ui_hostname if not provided"
-      set_fact:
+      ansible.builtin.set_fact:
         longhorn_ui_hostname: "{{ cluster_config.longhorn_ui_hostname | default('longhorn.' + cluster_config.cluster_name + '.' + cluster_config.networking.dns_search_domain, true) }}"
 
     - name: Generate Longhorn Ingress Yaml
@@ -83,6 +86,7 @@
         cmd: kubectl apply -f /tmp/longhorn-ingress.yaml --kubeconfig /etc/kubernetes/admin.conf
       when:
         - cluster_config.ingress_controller in ['nginx', 'traefik']
+      changed_when: true
 
     - name: Create Longhorn Certificate
       when: cluster_config.cert_manager_enabled | default(false)
@@ -102,3 +106,37 @@
           ansible.builtin.command:
             cmd: kubectl apply -f /tmp/longhorn-certificate.yaml --kubeconfig /etc/kubernetes/admin.conf
           changed_when: true
+
+    # --- New tasks to manage the default StorageClass ---
+    - name: Get all storage classes from the cluster
+      kubernetes.core.k8s_info:
+        kind: StorageClass
+        kubeconfig: /etc/kubernetes/admin.conf
+      register: storage_classes
+      changed_when: false
+
+    - name: Unset any existing default storage classes
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: patched
+        kind: StorageClass
+        name: "{{ item.metadata.name }}"
+        definition:
+          metadata:
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "false"
+      loop: "{{ storage_classes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: item.metadata.annotations['storageclass.kubernetes.io/is-default-class'] | default('false') == 'true'
+
+    - name: Set 'longhorn' as the default storage class
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: patched
+        kind: StorageClass
+        name: longhorn
+        definition:
+          metadata:
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "true"

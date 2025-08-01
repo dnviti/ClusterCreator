@@ -32,7 +32,7 @@
         state: mounted
       when: storage_disk_stat.stat.exists
 
-- name: Install Rook Ceph Helm Chart
+- name: Install Rook Ceph and Configure Storage
   hosts: controlplane[0]
   become: true
   gather_facts: false
@@ -42,10 +42,12 @@
     - name: Add Rook Ceph Helm repository
       ansible.builtin.command:
         cmd: helm repo add rook-release https://charts.rook.io/release
+      changed_when: false
 
     - name: Update Helm repositories
       ansible.builtin.command:
         cmd: helm repo update
+      changed_when: false
 
     - name: Create Rook Ceph namespace
       kubernetes.core.k8s:
@@ -55,10 +57,128 @@
         state: present
         kubeconfig: /etc/kubernetes/admin.conf
 
-    - name: Install Rook Ceph Operator
+    - name: Install Rook Ceph Operator Helm Chart
       ansible.builtin.command:
         cmd: >
           helm upgrade --install rook-ceph rook-release/rook-ceph
           --namespace rook-ceph
           --set csi.enableRbdDriver=true
           --kubeconfig /etc/kubernetes/admin.conf
+      changed_when: true
+
+    # --- Create Ceph Cluster and Storage Resources ---
+    - name: Create Rook Ceph Cluster
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: ceph.rook.io/v1
+          kind: CephCluster
+          metadata:
+            name: rook-ceph
+            namespace: rook-ceph
+          spec:
+            cephVersion:
+              image: quay.io/ceph/ceph:v18.2.0
+            dataDirHostPath: /var/lib/rook
+            mon:
+              count: 3
+              allowMultiplePerNode: false
+            mgr:
+              count: 1
+            storage:
+              useAllNodes: true
+              useAllDevices: false
+              directories:
+                - path: /var/lib/rook
+            dashboard:
+              enabled: true
+              ssl: false
+            crashCollector:
+              disable: true
+
+    - name: Create Ceph Block Pool
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: ceph.rook.io/v1
+          kind: CephBlockPool
+          metadata:
+            name: replicapool
+            namespace: rook-ceph
+          spec:
+            failureDomain: host
+            replicated:
+              size: 3 # For production, ensure you have at least 3 nodes. For testing on 1 node, set to 1.
+              
+    - name: Create Ceph RBD StorageClass
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: rook-ceph-block
+          provisioner: rook-ceph.rbd.csi.ceph.com
+          parameters:
+            clusterID: rook-ceph
+            pool: replicapool
+            imageFormat: "2"
+            csi.storage.k8s.io/provisioner-secret-name: rook-csi-rbd-provisioner
+            csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+            csi.storage.k8s.io/controller-expand-secret-name: rook-csi-rbd-provisioner
+            csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+            csi.storage.k8s.io/node-stage-secret-name: rook-csi-rbd-node
+            csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
+            csi.storage.k8s.io/fstype: ext4
+          reclaimPolicy: Delete
+          allowVolumeExpansion: true
+
+    # --- Wait for cluster to be ready before setting default StorageClass ---
+    - name: Wait for the Ceph cluster to be ready
+      kubernetes.core.k8s_info:
+        api_version: ceph.rook.io/v1
+        kind: CephCluster
+        name: rook-ceph
+        namespace: rook-ceph
+        kubeconfig: /etc/kubernetes/admin.conf
+      register: ceph_cluster_status
+      until: "ceph_cluster_status.resources[0].status.state == 'Created'"
+      retries: 30
+      delay: 20
+
+    # --- New tasks to manage the default StorageClass ---
+    - name: Get all storage classes from the cluster
+      kubernetes.core.k8s_info:
+        kind: StorageClass
+        kubeconfig: /etc/kubernetes/admin.conf
+      register: storage_classes
+      changed_when: false
+
+    - name: Unset any existing default storage classes
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: patched
+        kind: StorageClass
+        name: "{{ item.metadata.name }}"
+        definition:
+          metadata:
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "false"
+      loop: "{{ storage_classes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: item.metadata.annotations['storageclass.kubernetes.io/is-default-class'] | default('false') == 'true'
+
+    - name: Set 'rook-ceph-block' as the default storage class
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: patched
+        kind: StorageClass
+        name: rook-ceph-block
+        definition:
+          metadata:
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "true"

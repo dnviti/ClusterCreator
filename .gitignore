@@ -2,7 +2,6 @@
 .terraform*
 terraform/secrets.tf
 terraform/terraform.tfstate*
-terraform/clusters.tf
 ansible/tmp
 *.DS_Store
 scripts/.env

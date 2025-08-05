@@ -98,6 +98,7 @@ variable "clusters" {
         type                 : optional(string, "pci")                                    # Optional. pci or usb.
         mdev                 : optional(string, "")                                       # Optional. The mediated device ID. Helpful for partial pci(e) pass-through.
         rombar               : optional(bool, true)                                       # Optional. Whether to include the rombar with the pci(e) device.
+        xvga                 : optional(bool, false)                                      # Optional. Whether to enable xvga for the pci(e) device.
       })), [])
     }))
   }))

@@ -56,6 +56,7 @@ resource "proxmox_virtual_environment_vm" "node" {
       pcie    = true
       mdev    = try(hostpci.value.mdev, null) != "" ? hostpci.value.mdev : null
       rombar  = hostpci.value.rombar
+      xvga    = hostpci.value.xvga
     }
   }
   dynamic "usb" {

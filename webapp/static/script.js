@@ -1,5 +1,6 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const WS_URL = `ws://${window.location.host}/ws/commands`;
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const WS_URL = `${protocol}://${window.location.host}/ws/commands`;
     let socket;
     let fullTfConfig = {}; // Store the full TF config globally
 

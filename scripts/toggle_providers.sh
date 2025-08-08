@@ -8,6 +8,7 @@ usage() {
   echo "Providers that can be toggled:"
   echo "  * Unifi - toggling off will stop trying to make networks/vlans with Unifi."
   echo "  * Minio - toggling off will store all terraform state locally instead of in Minio's S3-compatible storage"
+  echo "  * VMware vSphere - toggling on will allow Terraform to manage resources in a vSphere environment"
 }
 
 # Prompt the user
@@ -15,6 +16,8 @@ echo -e "${YELLOW}Are you using MinIO to store the Terraform state? (y/n)${ENDCO
 read -r use_minio
 echo -e "${YELLOW}Are you using Unifi as part of your setup? (y/n)$ENDCOLOR"
 read -r use_unifi
+echo -e "${YELLOW}Are you using VMware vSphere as part of your setup? (y/n)$ENDCOLOR"
+read -r use_vsphere
 
 # General function to toggle a block in a Terraform file using awk for balanced braces
 toggle_tf_block() {
@@ -81,9 +84,11 @@ unifi_file="$REPO_PATH/terraform/unifi.tf"
 # Toggle specific blocks in providers.tf based on user input
 toggle_tf_block "aws =" "$use_minio" "$providers_file"
 toggle_tf_block "unifi =" "$use_unifi" "$providers_file"
+toggle_tf_block "vsphere =" "$use_vsphere" "$providers_file"
 toggle_tf_block 'backend "s3"' "$use_minio" "$providers_file"
 toggle_tf_block 'provider "aws"' "$use_minio" "$providers_file"
 toggle_tf_block 'provider "unifi"' "$use_unifi" "$providers_file"
+toggle_tf_block 'provider "vsphere"' "$use_vsphere" "$providers_file"
 toggle_tf_block 'resource "unifi_network"' "$use_unifi" "$unifi_file"
 
 # Toggle minio-related lines in configure_secrets.sh
@@ -98,6 +103,11 @@ toggle_secrets_lines "minio_endpoint" "$use_minio" "$variables_file"
 # Toggle unifi-related lines in configure_secrets.sh
 toggle_secrets_lines "unifi_username" "$use_unifi" "$secrets_file"
 toggle_secrets_lines "unifi_password" "$use_unifi" "$secrets_file"
+
+# Toggle vsphere-related lines in configure_secrets.sh
+toggle_secrets_lines "vsphere_server" "$use_vsphere" "$secrets_file"
+toggle_secrets_lines "vsphere_user" "$use_vsphere" "$secrets_file"
+toggle_secrets_lines "vsphere_password" "$use_vsphere" "$secrets_file"
 
 # Toggle unifi-related lines in variables.tf
 toggle_secrets_lines "unifi_api_url" "$use_unifi" "$variables_file"

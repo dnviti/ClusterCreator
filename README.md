@@ -153,6 +153,8 @@ You can enable the Unifi provider to enable your Unifi controller to make dedica
 
 You can enable the Minio provider to store your tofu/terraform state in S3 instead of your local computer. This is recommended for your production clusters.
 
+You can enable the VMware vSphere provider to connect to a vCenter server and manage resources in a vSphere environment.
+
 Use the new `ccr` command to enable the provider of your choice.
 
 ```shell
@@ -187,6 +189,7 @@ This will guide you through setting
 - **Proxmox Credentials**: Refer to for creating API tokens.
 - **Unifi Credentials**: (optional, needs to be toggled on first) Create a service account in the Unifi Controller with Site Admin permissions for the Network app.
 - **Minio Access Key/Secret**: (optional, needs to be toggled on first) Create a minio access key that has read/write access to the bucket specified in `terraform/variables.tf`.
+- **vSphere Credentials**: (optional, needs to be toggled on first) Provide the vCenter server address, username, and password.
 
 ### 7. Configure Clusters
 

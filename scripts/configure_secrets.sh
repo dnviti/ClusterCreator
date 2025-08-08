@@ -51,6 +51,9 @@ tf_variables=(
 #     "unifi_password|Enter the Unifi service account password"
 #     "minio_access_key|Enter the MinIO access key"
 #     "minio_secret_key|Enter the MinIO secret key"
+    "vsphere_server|Enter the vCenter server address"
+    "vsphere_user|Enter the vCenter username"
+    "vsphere_password|Enter the vCenter password"
 )
 
 # Function to prompt and save secrets

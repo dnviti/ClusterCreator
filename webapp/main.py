@@ -10,6 +10,7 @@ import yaml
 from pathlib import Path
 import shutil
 import hcl2
+import shlex
 
 app = FastAPI()
 
@@ -61,10 +62,9 @@ def get_repo_path_sync():
     """Gets the repo path from the ccr script, capturing stderr on failure."""
     try:
         ccr_command = get_ccr_command()
-        command = f"{ccr_command} get-repo-path"
+        command = [ccr_command, "get-repo-path"]
         result = subprocess.run(
             command,
-            shell=True,
             capture_output=True,
             text=True,
             encoding='utf-8'
@@ -73,12 +73,11 @@ def get_repo_path_sync():
             # Capture the specific error message from the script
             error_msg = result.stderr.strip()
             if not error_msg:
-                error_msg = f"Command '{command}' failed with exit code {result.returncode} but no stderr output."
+                error_msg = f"Command '{' '.join(command)}' failed with exit code {result.returncode} but no stderr output."
             return None, error_msg
         return result.stdout.strip(), None
     except Exception as e:
-        print(f"Error getting repo path: {e}")
-        return None, str(e)
+        return None, f"An unexpected error occurred in get_repo_path_sync: {e}"
 
 def get_and_update_tf_file(cluster_to_update=None, new_config=None):
     """
@@ -131,49 +130,75 @@ def get_and_update_tf_file(cluster_to_update=None, new_config=None):
         return {"error": f"Failed to process {tf_file_path}: {e}"}
 
 
-async def run_and_stream_command(websocket: WebSocket, command: str):
+async def run_and_stream_command(websocket: WebSocket, command: list[str]):
+    """Runs a command and streams its output to the WebSocket."""
     try:
+        # Sanitize command arguments for safe shell execution
+        safe_command_str = ' '.join(shlex.quote(str(arg)) for arg in command)
+
         process = await asyncio.create_subprocess_shell(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            safe_command_str,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
+
         async def stream_pipe(pipe, msg_type):
-            async for line in pipe:
-                await websocket.send_json({"type": msg_type, "data": line.decode('utf-8').strip()})
-        await asyncio.gather(stream_pipe(process.stdout, "log"), stream_pipe(process.stderr, "log_error"))
+            """Helper to stream lines from a subprocess pipe."""
+            if pipe is not None:
+                async for line in pipe:
+                    await websocket.send_json({"type": msg_type, "data": line.decode('utf-8').strip()})
+
+        await asyncio.gather(
+            stream_pipe(process.stdout, "log"),
+            stream_pipe(process.stderr, "log_error")
+        )
+
         await process.wait()
-        await websocket.send_json({"type": "command_end", "data": f"Command finished: {command}"})
+        return_code = process.returncode
+
+        await websocket.send_json({
+            "type": "command_end",
+            "data": f"Command finished: {' '.join(command)} with exit code {return_code}"
+        })
+
     except Exception as e:
         await websocket.send_json({"type": "log_error", "data": f"Failed to execute command: {e}"})
 
+
 def get_kube_contexts_sync():
     kubeconfig_path = Path.home() / ".kube" / "config"
-    if not kubeconfig_path.is_file(): return []
+    if not kubeconfig_path.is_file():
+        return {"error": "Kubeconfig file not found at ~/.kube/config"}
     try:
         with open(kubeconfig_path, 'r') as f:
-            return [context['name'] for context in yaml.safe_load(f).get('contexts', []) if 'name' in context]
+            contexts = yaml.safe_load(f).get('contexts', [])
+            if not contexts:
+                return []
+            return [context['name'] for context in contexts if 'name' in context]
     except Exception as e:
-        return []
+        return {"error": f"Failed to parse kubeconfig file: {e}"}
+
 
 def get_current_context_sync():
     try:
-        command = f"{get_ccr_command()} ctx"
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, encoding='utf-8')
+        command = [get_ccr_command(), "ctx"]
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8')
         if result.returncode != 0:
             error_msg = result.stderr.strip()
             if not error_msg:
-                error_msg = f"Command '{command}' failed with exit code {result.returncode} but no stderr output."
-            return f"Error: {error_msg}"
-        return result.stdout.strip()
+                error_msg = f"Command '{' '.join(command)}' failed with exit code {result.returncode} but no stderr output."
+            return {"error": error_msg}
+        return {"data": result.stdout.strip()}
     except Exception as e:
-        return f"Error: {e}"
+        return {"error": f"An unexpected error occurred in get_current_context_sync: {e}"}
+
 
 def get_nodes_sync():
     """Synchronous helper to get nodes via the ccr command with robust error handling."""
     try:
-        command = f"{get_ccr_command()} list-nodes"
+        command = [get_ccr_command(), "list-nodes"]
         result = subprocess.run(
             command,
-            shell=True,
             capture_output=True,
             text=True,
             encoding='utf-8'
@@ -181,7 +206,7 @@ def get_nodes_sync():
         if result.returncode != 0:
             error_msg = result.stderr.strip()
             if not error_msg:
-                error_msg = f"Command '{command}' failed with exit code {result.returncode} but no stderr output."
+                error_msg = f"Command '{' '.join(command)}' failed with exit code {result.returncode} but no stderr output."
             return {"error": error_msg}
 
         if not result.stdout.strip():
@@ -212,49 +237,67 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            message = await websocket.receive_json()
-            msg_type = message.get("type")
-            payload = message.get("payload", {})
-            
-            if msg_type == "get_initial_data":
-                await websocket.send_json({"type": "tf_clusters", "data": get_and_update_tf_file()})
-                await websocket.send_json({"type": "kube_contexts_list", "data": get_kube_contexts_sync()})
-                await websocket.send_json({"type": "current_context", "data": get_current_context_sync()})
-                await websocket.send_json({"type": "nodes_list", "data": get_nodes_sync()})
-
-            elif msg_type == "get_nodes":
-                 await websocket.send_json({"type": "nodes_list", "data": get_nodes_sync()})
-
-            elif msg_type == "update_tf_cluster":
-                cluster_name = payload.get("cluster_name")
-                new_config = payload.get("config")
+            try:
+                message = await websocket.receive_json()
+                msg_type = message.get("type")
+                payload = message.get("payload", {})
                 
-                update_result = get_and_update_tf_file(cluster_name, new_config)
-                
-                if update_result.get("error"):
-                    await websocket.send_json({"type": "log_error", "data": update_result["error"]})
-                else:
-                    await websocket.send_json({"type": "log", "data": update_result["message"]})
-                    ccr_command = get_ccr_command()
-                    await run_and_stream_command(websocket, f"{ccr_command} tofu apply -auto-approve")
+                if msg_type == "get_initial_data":
                     await websocket.send_json({"type": "tf_clusters", "data": get_and_update_tf_file()})
+                    await websocket.send_json({"type": "kube_contexts_list", "data": get_kube_contexts_sync()})
+                    await websocket.send_json({"type": "current_context", "data": get_current_context_sync()})
                     await websocket.send_json({"type": "nodes_list", "data": get_nodes_sync()})
 
-            elif msg_type == "run_command":
-                ccr_command = get_ccr_command()
-                command_name = payload.get("command")
-                args = payload.get("args", [])
-                full_command = f"{ccr_command} {command_name} {' '.join(args)}"
-                await run_and_stream_command(websocket, full_command)
-                if command_name in ["ctx", "bootstrap"]:
-                     await websocket.send_json({"type": "current_context", "data": get_current_context_sync()})
+                elif msg_type == "get_nodes":
                      await websocket.send_json({"type": "nodes_list", "data": get_nodes_sync()})
-                     await websocket.send_json({"type": "tf_clusters", "data": get_and_update_tf_file()})
+
+                elif msg_type == "update_tf_cluster":
+                    cluster_name = payload.get("cluster_name")
+                    new_config = payload.get("config")
+
+                    update_result = get_and_update_tf_file(cluster_name, new_config)
+
+                    if update_result.get("error"):
+                        await websocket.send_json({"type": "log_error", "data": update_result["error"]})
+                    else:
+                        await websocket.send_json({"type": "log", "data": update_result["message"]})
+                        ccr_command = get_ccr_command()
+                        await run_and_stream_command(websocket, [ccr_command, "tofu", "apply", "-auto-approve"])
+                        await websocket.send_json({"type": "tf_clusters", "data": get_and_update_tf_file()})
+                        await websocket.send_json({"type": "nodes_list", "data": get_nodes_sync()})
+
+                elif msg_type == "run_command":
+                    ccr_command = get_ccr_command()
+                    command_name = payload.get("command")
+                    args = payload.get("args", [])
+
+                    # Command validation
+                    allowed_commands = [
+                        "bootstrap", "install-system-services", "uninstall-system-services",
+                        "install-monitoring", "uninstall-monitoring", "install-user-addons",
+                        "uninstall-user-addons", "add-nodes", "drain-node", "delete-node",
+                        "upgrade-node", "reset-node", "reset-all-nodes", "upgrade-addons",
+                        "upgrade-k8s", "vmctl", "run-command", "must-gather", "ctx"
+                    ]
+                    if command_name not in allowed_commands:
+                        await websocket.send_json({"type": "log_error", "data": f"Invalid command: {command_name}"})
+                        continue
+
+                    full_command = [ccr_command, command_name] + args
+                    await run_and_stream_command(websocket, full_command)
+
+                    if command_name in ["ctx", "bootstrap"]:
+                         await websocket.send_json({"type": "current_context", "data": get_current_context_sync()})
+                         await websocket.send_json({"type": "nodes_list", "data": get_nodes_sync()})
+                         await websocket.send_json({"type": "tf_clusters", "data": get_and_update_tf_file()})
+            except Exception as e:
+                await websocket.send_json({"type": "log_error", "data": f"An error occurred while processing your request: {e}"})
 
     except WebSocketDisconnect:
         print("Client disconnected")
     except Exception as e:
-        print(f"An error occurred in WebSocket: {e}")
+        print(f"An error occurred in WebSocket connection: {e}")
+
 
 # --- Root Endpoint for Frontend ---
 @app.get("/")

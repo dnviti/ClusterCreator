@@ -1,4 +1,6 @@
 locals {
+  provider = "proxmox" # This will be replaced by the select_provider.sh script
+
   all_nodes = flatten([
     for cluster_name, cluster in var.clusters : [
       for node_class, specs in cluster.node_classes : [
@@ -14,11 +16,11 @@ locals {
           cores               = specs.cores
           sockets             = specs.sockets
           memory              = specs.memory
-          disks               = specs.disks
-          devices             = specs.devices
-          pve_nodes           = specs.pve_nodes
-          machine             = specs.machine
-          cpu_type            = specs.cpu_type
+          disks               = specs.provider_spec[local.provider].disks
+          devices             = specs.provider_spec[local.provider].devices
+          pve_nodes           = specs.provider_spec[local.provider].pve_nodes
+          machine             = specs.provider_spec[local.provider].machine
+          cpu_type            = specs.provider_spec[local.provider].cpu_type
           bridge              = cluster.networking.bridge
           use_unifi           = cluster.networking.use_unifi
           vlan_id             = cluster.networking.assign_vlan ? (cluster.networking.vlan_id == null ? "${cluster.cluster_id}00" : cluster.networking.vlan_id) : null

@@ -233,6 +233,7 @@ display_usage() {
     echo "  vmctl                     Controls VM state, including power controls and backups"
     echo "  run-command               Runs a bash command on a host or an Ansible host group"
     echo "  toggle-providers          Toggles the S3 (Minio) and Unifi providers"
+    echo "  select-provider           Selects the main provider for your cluster"
     echo "  must-gather               Gathers logs and diagnostic information from the cluster"
     echo ""
     echo "Use the -h/--help flag following a command for more descriptive help output."
@@ -428,6 +429,9 @@ case "$COMMAND" in
         ;;
     toggle-providers)
         ( "$REPO_PATH/scripts/toggle_providers.sh" "$@" )
+        ;;
+    select-provider)
+        ( "$REPO_PATH/scripts/select_provider.sh" "$@" )
         ;;
     tofu)
         ( cd "$REPO_PATH/terraform" && tofu "$@" )

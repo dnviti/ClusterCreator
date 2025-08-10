@@ -2,7 +2,7 @@
 # https://registry.terraform.io/providers/bpg/proxmox/latest/docs/resources/virtual_environment_vm
 resource "proxmox_virtual_environment_vm" "node" {
   depends_on = [proxmox_virtual_environment_pool.operations_pool]
-  for_each = { for node in local.nodes : "${node.cluster_name}-${node.node_class}-${node.index}" => node }
+  for_each = var.provider == "proxmox" ? { for node in local.nodes : "${node.cluster_name}-${node.node_class}-${node.index}" => node } : {}
 
   description  = "Managed by Terraform"
   vm_id = each.value.vm_id
